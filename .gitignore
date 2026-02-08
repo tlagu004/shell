@@ -1,0 +1,40 @@
+# --- Executables ---
+*.exe
+*.out
+*.app
+# If you name your output 'main' or 'app' specifically:
+/main
+/app
+
+# --- Objects and Libraries ---
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# --- Build Directories ---
+build/
+bin/
+obj/
+out/
+
+# --- Debug Symbols & IDEs ---
+*.dSYM/
+*.pdb
+*.ilk
+.vscode/
+.idea/
+*.swp
+*.user
+
+# --- Dependency Folders ---
+vcpkg_installed/
+
+# --- Operating System Files ---
+.DS_Store
+Thumbs.db
+.idx
+osh
