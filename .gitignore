@@ -37,4 +37,7 @@ vcpkg_installed/
 .DS_Store
 Thumbs.db
 .idx
+
+# Custom files to ignore
 osh
+out.txt
