@@ -21,7 +21,7 @@ Example: osh> ls > out.txt (note to self: redirects output to file)
 Example: osh> sort < in.txt (note to self: redirects input from file)
 
 Pipe commands
-Example: osh> ls | grep file.txt
+Example: osh> ls -l | less
 
 Exit command
 Example: osh> exit
