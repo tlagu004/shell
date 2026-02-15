@@ -6,8 +6,92 @@
 #include <sys/wait.h>
 #include <fcntl.h>  
 #include <sys/stat.h>
+#include <signal.h> 
+#include <dirent.h>
 
 #define MAX_LINE 80  
+#define MAX_ALIASES 10
+
+struct alias {
+    char name[20];
+    char command[MAX_LINE];
+};
+
+struct alias aliases[MAX_ALIASES];
+int alias_count = 0;
+pid_t bg_jobs[100];
+int bg_jobs_count = 0;
+
+// HANDLE SIGNALS (CTRL+C or +Z)
+void handle_signals(int sig){
+    if (sig == SIGINT){
+        printf("\n[SIGINT] Use 'exit' to quit.\nosh> ");
+    } else if (sig == SIGTSTP){
+        printf("\n[SIGTSTP] Shell suspension disabled.\nosh> ");
+    }
+    fflush(stdout);
+}
+
+// MONITORS JOBS/TASKS
+void monitor_jobs(){
+    for (int j = 0; j < bg_jobs_count; j++){
+        if (bg_jobs[j] > 0 && waitpid(bg_jobs[j], NULL, WNOHANG) > 0){
+            printf("\n[Background job %d completed]\nosh> ", bg_jobs[j]);
+            fflush(stdout);
+            bg_jobs[j] = -1;
+        }
+    }
+}
+
+// APPLY ALIASES
+void apply_aliases(char *input){
+    for (int a = 0; a < alias_count; a++){
+        int len = strlen(aliases[a].name);
+        if (strncmp(input, aliases[a].name, len) == 0 && (input[len] == ' ' || input[len] == '\0')){
+            char temp_input[MAX_LINE];
+            sprintf(temp_input, "%s%s", aliases[a].command, input + len);
+            strcpy(input, temp_input);
+            break;
+        }
+    }
+}
+
+// EXECUTE COMMAND
+void execute_command(char **args, int background){
+    pid_t pid = fork();
+            
+    if (pid < 0) { 
+        perror("Fork Failed");
+    } else if (pid == 0) { // CHILD PROCESS
+        for (int j = 0; args[j] != NULL; j++) {
+            if (strcmp(args[j], ">") == 0) {
+                int fd = open(args[j+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) { perror("Error opening file"); exit(1); }
+                dup2(fd, STDOUT_FILENO); 
+                close(fd);  
+                args[j] = NULL;
+            } else if (strcmp(args[j], "<") == 0) {
+                int fd = open(args[j+1], O_RDONLY);
+                if (fd < 0) { perror("Error opening file"); exit(1); }
+                dup2(fd, STDIN_FILENO);
+                close(fd);                        
+                args[j] = NULL;
+            }
+        }
+        if (execvp(args[0], args) == -1){
+            perror("Regular execution failed");
+            exit(1);
+        }
+    } else { // PARENT PROCESS
+        if (background == 0) {
+            fprintf(stderr, "Parent waiting for child PID %d...\n", pid);
+            waitpid(pid, NULL, 0);
+        } else {
+            fprintf(stderr, "Parent continuing (Child PID %d in background)\n", pid);
+            bg_jobs[bg_jobs_count++] = pid;
+        }
+    }
+}
 
 int main(void)
 {
@@ -17,8 +101,12 @@ int main(void)
     int has_history = 0;  
     int should_run = 1; 
 
-    
+    // HANDLE CTRL+C and CTRL+Z
+    signal(SIGINT, handle_signals);
+    signal(SIGTSTP, handle_signals);
+
     while (should_run == 1) {
+        monitor_jobs();
         printf("osh> ");
         fflush(stdout);
         
@@ -33,6 +121,29 @@ int main(void)
         if (fgets(input, MAX_LINE, stdin) == NULL) break;
         input[strcspn(input, "\n")] = '\0';
 
+        // CHECK EMPTY INPUT
+        if (strlen(input) == 0) continue;
+
+        // COMMAND COMPLETION
+        if (input[strlen(input) - 1] == '?'){
+            input[strlen(input) - 1] = '\0';
+            if (has_history && strncmp(history, input, strlen(input))== 0){
+                printf("Completion found: %s\n", history);
+                strcpy(input, history);
+            } else {
+                printf("No match in history. Listed Directory Hints:\n");
+                DIR *d = opendir(".");
+                struct dirent *dir;
+                while ((dir = readdir(d)) != NULL) {
+                    if (strncmp(dir->d_name, input, strlen(input)) == 0)
+                        printf("  %s\n", dir->d_name);
+                }
+                closedir(d);
+                fflush(stdout);
+                continue;
+            }
+        }
+
         // EXIT 
         if (strcmp(input, "exit") == 0) {
             fprintf(stderr, "(exit detected) Terminating shell...\n");
@@ -40,6 +151,27 @@ int main(void)
             continue;
         }
         
+        // KILL PROCESS
+        if (strncmp(input, "kill ", 5) == 0) {
+            pid_t pid_to_kill = atoi(input + 5);
+            if (kill(pid_to_kill, SIGKILL) == 0) printf("Process %d terminated.\n", pid_to_kill);
+            else perror("Kill failed");
+            continue;
+        }
+
+        // CREATE ALIAS
+        if (strncmp(input, "alias ", 6) == 0){
+            char *name = strtok(input + 6, "=");
+            char *command = strtok(NULL, "");
+            if (name && command && alias_count < MAX_ALIASES){
+                strcpy(aliases[alias_count].name, name);
+                strcpy(aliases[alias_count].command, command);
+                alias_count++;
+                printf("Alias '%s' for '%s' has been created.\n", name, command);
+            }
+            continue;
+        }
+
         // HISTORY FEATURE
         if (strcmp(input, "!!") == 0) {
             printf("(!! detected)");
@@ -54,6 +186,9 @@ int main(void)
             has_history = 1;
         } 
 
+        // CHECK FOR ALIASES
+        apply_aliases(input);
+        
         // TOKENIZATION
         int i = 0;
         char temp_input[MAX_LINE];
@@ -117,48 +252,8 @@ int main(void)
                 background = 1;
                 args[i-1] = NULL; 
             }
-            pid_t pid = fork();
-            
-            if (pid < 0) { 
-                fprintf(stderr, "Fork Failed");
-                return 1;
-            } else if (pid == 0) { 
-                for (int j = 0; args[j] != NULL; j++) {
-                    if (strcmp(args[j], ">") == 0) {
-                        fprintf(stderr, "Redirecting output to %s\n", args[j+1]);
-                        int fd = open(args[j+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                        if (fd < 0) {
-                            perror("Error opening file");
-                            exit(1);
-                        }
-                        dup2(fd, STDOUT_FILENO); 
-                        close(fd);  
-                        args[j] = NULL;
-                    }
-                    
-                else if (strcmp(args[j], "<") == 0) {
-                    fprintf(stderr, "Redirecting input from %s\n", args[j+1]);
-                    int fd = open(args[j+1], O_RDONLY);
-                    if (fd < 0) {
-                        perror("Error opening file");
-                        exit(1);
-                    }
-                    dup2(fd, STDIN_FILENO);
-                    close(fd);                        
-                    args[j] = NULL;
-                }
-            }
-            execvp(args[0], args);
-            perror("Regular execution failed.\n");
-            return 1;
-        } else { 
-            if (background == 0) {
-                fprintf(stderr, "Parent waiting for child PID %d...\n", pid);
-                waitpid(pid, NULL, 0);
-            } else {
-                fprintf(stderr, "Parent continuing (Child PID %d in background)\n", pid);
-            }
-        }
+            // EXECUTE COMMAND
+            execute_command(args, background);
         }
     }
     printf("Program terminated\n");

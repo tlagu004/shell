@@ -1,0 +1,3 @@
+This is a generic text file.
+You can add your content here.
+Feel free to modify or delete this boilerplate.
